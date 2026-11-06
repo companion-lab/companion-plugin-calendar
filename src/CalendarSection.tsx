@@ -11,7 +11,7 @@ import type { View, ToolbarProps } from "react-big-calendar";
 import { format, parse, startOfWeek, getDay } from "date-fns";
 import { enUS } from "date-fns/locale";
 import { injectStyles } from "./styles";
-import type { PluginContext } from "../../sdk/js/@companion/plugin";
+import type { PluginContext } from "@companion-lab/plugin";
 import { useCalendar, type CalendarApi } from "./backend";
 import { TimePicker } from "./TimePicker";
 import { ServerFormModal } from "./ServerFormModal";

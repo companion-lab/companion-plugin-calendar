@@ -4,7 +4,7 @@
   "private": true,
   "description": "calendar feature plugin for the Companion app.",
   "dependencies": {
-    "@companion-lab/plugin": "file:./sdk/js/@companion/plugin",
+    "@companion-lab/plugin": "^0.1.0",
     "react-big-calendar": "^1.19.4",
     "date-fns": "^4.1.0"
   }
