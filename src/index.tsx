@@ -1,7 +1,7 @@
 // Calendar feature plugin: settings tab, reminder banner widget, and calendar
 // tools (registered on the Rust backend side via `tools()`).
 
-import { definePlugin, type PluginContext } from "@companion-lab/plugin";
+import { definePlugin, type PluginContext } from "../../../sdk/js/@companion/plugin";
 import { CalendarSection } from "./CalendarSection";
 import { ReminderBanner } from "./ReminderBanner";
 
