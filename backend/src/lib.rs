@@ -11,7 +11,7 @@
 //! - Tools: `calendar_list/create/update/delete` reach the chat model as
 //!   `calendar__<name>`.
 
-use chrono::{Datelike, Local, NaiveDate, TimeZone, Timelike};
+use chrono::{Datelike, Local, NaiveDate, Timelike};
 use companion_plugin_sdk::{export_plugin, Plugin, PluginCtx, ToolDef};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -173,11 +173,15 @@ impl Calendar {
     }
 
     fn tool_create(&self, args: &Value) -> Result<String, String> {
-        let date_text = [arg_str(args, "date"), arg_str(args, "on"), arg_str(args, "at")]
-            .iter()
-            .find(|s| !s.is_empty())
-            .cloned()
-            .unwrap_or_default();
+        let date_text = [
+            arg_str(args, "date"),
+            arg_str(args, "on"),
+            arg_str(args, "at"),
+        ]
+        .iter()
+        .find(|s| !s.is_empty())
+        .cloned()
+        .unwrap_or_default();
         let date = parse_date(&date_text).map(|d| d.format("%Y-%m-%d").to_string());
         let Some(date) = date else {
             return Err("could not read the date. Use YYYY-MM-DD, 'today', 'tomorrow', 'Dec 25', or a weekday name.".into());
@@ -195,10 +199,17 @@ impl Calendar {
                     .unwrap_or_default();
                 match parse_clock_text(&text) {
                     Some((h, m)) => (h, m),
-                    None if args.get("all_day").and_then(|v| v.as_bool()).unwrap_or(false) => (9, 0),
-                    None => {
-                        return Err("could not read the time. Use hour and minute, or a string like '15:00'.".into())
+                    None if args
+                        .get("all_day")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false) =>
+                    {
+                        (9, 0)
                     }
+                    None => return Err(
+                        "could not read the time. Use hour and minute, or a string like '15:00'."
+                            .into(),
+                    ),
                 }
             }
         };
@@ -213,11 +224,9 @@ impl Calendar {
             "monthly" => Some(Repeat::Monthly),
             "yearly" | "year" | "annually" => Some(Repeat::Yearly),
             "none" | "" => None,
-            other => {
-                return Err(format!(
-                    "unknown repeat '{other}'. Use none, daily, weekdays, weekly, monthly, or yearly."
-                ))
-            }
+            other => return Err(format!(
+                "unknown repeat '{other}'. Use none, daily, weekdays, weekly, monthly, or yearly."
+            )),
         };
         let event = CalendarEvent {
             id: String::new(),
@@ -226,16 +235,26 @@ impl Calendar {
             date,
             hour,
             minute,
-            all_day: args.get("all_day").and_then(|v| v.as_bool()).unwrap_or(false),
+            all_day: args
+                .get("all_day")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
             end_hour,
             end_minute,
             repeat,
-            repeat_yearly: args.get("repeat_yearly").and_then(|v| v.as_bool()).unwrap_or(false),
+            repeat_yearly: args
+                .get("repeat_yearly")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
             message: arg_str(args, "message"),
             enabled: true,
             last_fired: None,
         };
-        let title = if event.title.is_empty() { "Event".to_string() } else { event.title.clone() };
+        let title = if event.title.is_empty() {
+            "Event".to_string()
+        } else {
+            event.title.clone()
+        };
         let when = event.date.clone();
         self.op_save(event)?;
         Ok(format!("Created event '{title}' on {when}."))
@@ -370,10 +389,9 @@ impl Calendar {
                 Ok(json!({ "events": list }))
             }
             "calendar.save" => {
-                let event: CalendarEvent = serde_json::from_value(
-                    payload.get("event").cloned().unwrap_or(Value::Null),
-                )
-                .map_err(|e| format!("bad event: {e}"))?;
+                let event: CalendarEvent =
+                    serde_json::from_value(payload.get("event").cloned().unwrap_or(Value::Null))
+                        .map_err(|e| format!("bad event: {e}"))?;
                 let list = self.op_save(event)?;
                 Ok(json!({ "events": list }))
             }
@@ -476,7 +494,11 @@ pub fn parse_date(s: &str) -> Option<NaiveDate> {
             // Weekday name: next occurrence (never today-past ambiguity —
             // same-day names mean the upcoming one, 7 days out if passed).
             let days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
-            let key = if lower.len() > 3 { &lower[..3] } else { lower.as_str() };
+            let key = if lower.len() > 3 {
+                &lower[..3]
+            } else {
+                lower.as_str()
+            };
             days.iter().position(|d| *d == key).and_then(|target| {
                 let today_idx = today.weekday().num_days_from_monday() as usize;
                 let mut offset = (target + 7 - today_idx) % 7;
@@ -496,7 +518,9 @@ fn sanitize(ev: &mut CalendarEvent) -> Result<(), String> {
     // Only one-shots must start in the future; a recurring event may begin
     // in the past (its upcoming occurrences are what fire).
     if ev.repeat_rule() == Repeat::None && d < today {
-        return Err("that date is in the past. Pick today or a future date, or set a repeat option.".into());
+        return Err(
+            "that date is in the past. Pick today or a future date, or set a repeat option.".into(),
+        );
     }
     ev.date = d.format("%Y-%m-%d").to_string();
     let rule = ev.repeat_rule();
@@ -545,8 +569,7 @@ fn occurs_on(ev: &CalendarEvent, date: NaiveDate) -> bool {
         Repeat::None => d == date,
         Repeat::Daily => d <= date,
         Repeat::Weekdays => {
-            d <= date
-                && !matches!(date.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun)
+            d <= date && !matches!(date.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun)
         }
         Repeat::Weekly => d <= date && d.weekday() == date.weekday(),
         Repeat::Monthly => d <= date && d.day() == date.day(),
@@ -562,7 +585,11 @@ fn is_due(ev: &CalendarEvent, now: chrono::DateTime<Local>, minute_stamp: i64) -
     if !occurs_on(ev, now.date_naive()) {
         return false;
     }
-    let (h, m) = if ev.all_day { (9, 0) } else { (ev.hour, ev.minute) };
+    let (h, m) = if ev.all_day {
+        (9, 0)
+    } else {
+        (ev.hour, ev.minute)
+    };
     if h != now.hour() as u8 || m != now.minute() as u8 {
         return false;
     }
@@ -620,7 +647,12 @@ pub struct FiredEvent {
     pub loop_sound: bool,
 }
 
-fn spawn_scheduler(ctx: PluginCtx, events: Arc<Mutex<Vec<CalendarEvent>>>, data_dir: PathBuf, stop: Arc<AtomicBool>) {
+fn spawn_scheduler(
+    ctx: PluginCtx,
+    events: Arc<Mutex<Vec<CalendarEvent>>>,
+    data_dir: PathBuf,
+    stop: Arc<AtomicBool>,
+) {
     std::thread::Builder::new()
         .name("calendar-plugin-scheduler".into())
         .spawn(move || {
@@ -659,7 +691,11 @@ fn spawn_scheduler(ctx: PluginCtx, events: Arc<Mutex<Vec<CalendarEvent>>>, data_
 // ---------------------------------------------------------------------------
 
 fn arg_str(args: &Value, key: &str) -> String {
-    args.get(key).and_then(|v| v.as_str()).unwrap_or("").trim().to_string()
+    args.get(key)
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string()
 }
 
 /// Lenient "7am" / "7:30" / "19:05" parser.
@@ -745,20 +781,21 @@ fn format_calendar_line(e: &CalendarEvent, now: chrono::DateTime<Local>) -> Stri
         }
         Err(_) => e.date.clone(),
     };
-    let status = if !e.enabled {
-        "paused"
-    } else {
-        "active"
-    };
-    format!("- {title} — {when} ({status}) [id_for_tool_use_only: {}]", e.id)
+    let status = if !e.enabled { "paused" } else { "active" };
+    format!(
+        "- {title} — {when} ({status}) [id_for_tool_use_only: {}]",
+        e.id
+    )
 }
 
 fn tool_defs() -> Vec<ToolDef> {
-    let schema = |props: Value, required: &[&str]| json!({
-        "type": "object",
-        "properties": props,
-        "required": required,
-    });
+    let schema = |props: Value, required: &[&str]| {
+        json!({
+            "type": "object",
+            "properties": props,
+            "required": required,
+        })
+    };
     vec![
         ToolDef {
             name: "calendar_list".into(),
@@ -926,9 +963,15 @@ mod tests {
     #[test]
     fn date_parser_covers_model_forms() {
         let today = Local::now().date_naive();
-        assert_eq!(parse_date(&today.format("%Y-%m-%d").to_string()), Some(today));
+        assert_eq!(
+            parse_date(&today.format("%Y-%m-%d").to_string()),
+            Some(today)
+        );
         assert_eq!(parse_date("today"), Some(today));
-        assert_eq!(parse_date("tomorrow"), Some(today + chrono::Duration::days(1)));
+        assert_eq!(
+            parse_date("tomorrow"),
+            Some(today + chrono::Duration::days(1))
+        );
         // Month-day rolls forward when already passed this year.
         let jan1 = parse_date("Jan 1").unwrap();
         assert_eq!((jan1.month(), jan1.day()), (1, 1));
@@ -1035,7 +1078,10 @@ mod tests {
         let mut daily = event("2026-10-16", 9, 0);
         daily.repeat = Some(Repeat::Daily);
         assert!(occurs_on(&daily, sat));
-        assert!(!occurs_on(&daily, NaiveDate::from_ymd_opt(2026, 10, 15).unwrap()));
+        assert!(!occurs_on(
+            &daily,
+            NaiveDate::from_ymd_opt(2026, 10, 15).unwrap()
+        ));
 
         let mut weekdays = event("2026-10-16", 9, 0);
         weekdays.repeat = Some(Repeat::Weekdays);
@@ -1048,19 +1094,34 @@ mod tests {
         weekly.repeat = Some(Repeat::Weekly);
         assert!(occurs_on(&weekly, fri));
         assert!(!occurs_on(&weekly, sat));
-        assert!(!occurs_on(&weekly, NaiveDate::from_ymd_opt(2026, 10, 9).unwrap()));
+        assert!(!occurs_on(
+            &weekly,
+            NaiveDate::from_ymd_opt(2026, 10, 9).unwrap()
+        ));
 
         let mut monthly = event("2026-10-16", 9, 0);
         monthly.repeat = Some(Repeat::Monthly);
         assert!(!occurs_on(&monthly, sat));
-        assert!(occurs_on(&monthly, NaiveDate::from_ymd_opt(2026, 11, 16).unwrap()));
+        assert!(occurs_on(
+            &monthly,
+            NaiveDate::from_ymd_opt(2026, 11, 16).unwrap()
+        ));
         // Months without the day skip silently.
-        assert!(!occurs_on(&monthly, NaiveDate::from_ymd_opt(2026, 11, 30).unwrap()));
+        assert!(!occurs_on(
+            &monthly,
+            NaiveDate::from_ymd_opt(2026, 11, 30).unwrap()
+        ));
 
         let mut yearly = event("2026-02-28", 9, 0);
         yearly.repeat = Some(Repeat::Yearly);
-        assert!(occurs_on(&yearly, NaiveDate::from_ymd_opt(2031, 2, 28).unwrap()));
-        assert!(!occurs_on(&yearly, NaiveDate::from_ymd_opt(2031, 3, 1).unwrap()));
+        assert!(occurs_on(
+            &yearly,
+            NaiveDate::from_ymd_opt(2031, 2, 28).unwrap()
+        ));
+        assert!(!occurs_on(
+            &yearly,
+            NaiveDate::from_ymd_opt(2031, 3, 1).unwrap()
+        ));
     }
 
     #[test]
