@@ -2,7 +2,7 @@
 // replacement for the former host useCalendar().
 
 import { useCallback, useEffect, useState } from "react";
-import type { PluginContext } from "../../../sdk/js/@companion/plugin";
+import type { PluginContext } from "@companion-lab/plugin";
 import type { CalendarEvent } from "./calendar";
 
 type ListReply = { events: CalendarEvent[] };

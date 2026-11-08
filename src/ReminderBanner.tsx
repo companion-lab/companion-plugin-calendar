@@ -8,7 +8,7 @@
 // resolves to a silent provider — reminders still show visually.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { PluginContext } from "../../../sdk/js/@companion/plugin";
+import type { PluginContext } from "@companion-lab/plugin";
 import { injectStyles } from "./styles";
 
 const SNOOZE_MS = 5 * 60_000;

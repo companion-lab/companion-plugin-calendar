@@ -3,7 +3,7 @@
 // file stays self-contained inside the plugin.
 
 import { useEffect, useId, useRef, useState } from "react";
-import type { PluginContext } from "../../../sdk/js/@companion/plugin";
+import type { PluginContext } from "@companion-lab/plugin";
 
 type Ampm = "AM" | "PM";
 
