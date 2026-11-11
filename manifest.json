@@ -1,10 +1,18 @@
 {
   "id": "calendar",
   "name": "Calendar",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Dated events, birthdays, and appointments: a settings tab, reminder banners, and calendar tools the avatar can call.",
   "abi": 2,
-  "permissions": ["storage", "events", "tools"],
-  "frontend": { "entry": "frontend.js" },
-  "backend": { "library": "libcalendar_backend.dylib" }
+  "permissions": [
+    "storage",
+    "events",
+    "tools"
+  ],
+  "frontend": {
+    "entry": "frontend.js"
+  },
+  "backend": {
+    "library": "libcalendar_backend.dylib"
+  }
 }
