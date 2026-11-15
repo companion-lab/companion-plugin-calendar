@@ -1,6 +1,6 @@
 {
   "name": "companion-plugin-calendar",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "description": "calendar feature plugin for the Companion app.",
   "dependencies": {
