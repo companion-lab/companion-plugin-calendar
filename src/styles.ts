@@ -969,22 +969,26 @@ const VIEW_CSS = `.cal-month {
   gap: 4px;
 }
 
-.cal-month .cal-toolbar-picks select {
+/* The custom Select (host ui kit) renders a .st-select wrapper with a
+   .st-select-trigger button; keep the compact ghost look the toolbar had. */
+.cal-month .cal-toolbar-picks .st-select {
+  width: auto;
+}
+
+.cal-month .cal-toolbar-picks .st-select-trigger {
   background: transparent !important;
-  border: 1px solid transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
   color: var(--text-primary) !important;
   border-radius: var(--radius-sm) !important;
-  font-size: 13px !important;
   font-weight: 600 !important;
   padding: 3px 6px !important;
   padding-right: 20px !important;
-  cursor: pointer;
   width: auto !important;
-  background-position: right 4px center !important;
 }
 
-.cal-month .cal-toolbar-picks select:hover,
-.cal-month .cal-toolbar-picks select:focus {
+.cal-month .cal-toolbar-picks .st-select-trigger:hover,
+.cal-month .cal-toolbar-picks .st-select-trigger:focus {
   background: rgba(255, 255, 255, 0.05) !important;
   border-color: var(--border-subtle) !important;
 }
@@ -1049,20 +1053,24 @@ const VIEW_CSS = `.cal-month {
 }
 
 .dp-pick {
+  width: auto;
+}
+
+.dp-pick .st-select-trigger {
   font-family: inherit !important;
   font-size: 14px !important;
   font-weight: 600 !important;
   background: transparent !important;
   color: var(--text-primary) !important;
-  border: 1px solid transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
   border-radius: var(--radius-sm) !important;
   padding: 3px 4px !important;
   width: auto !important;
-  cursor: pointer;
 }
 
-.dp-pick:hover,
-.dp-pick:focus {
+.dp-pick .st-select-trigger:hover,
+.dp-pick .st-select-trigger:focus {
   background: rgba(255, 255, 255, 0.05) !important;
   border-color: var(--border-subtle) !important;
 }

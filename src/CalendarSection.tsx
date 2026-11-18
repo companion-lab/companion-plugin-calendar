@@ -43,8 +43,9 @@ const localizer = dateFnsLocalizer({
   locales: { "en-US": enUS },
 });
 
-function MonthYearToolbar(props: ToolbarProps) {
+function MonthYearToolbar({ ui, ...props }: ToolbarProps & { ui: PluginContext["ui"] }) {
   const { date, view, label, onNavigate, onView } = props;
+  const { Select } = ui;
   const month = date.getMonth();
   const year = date.getFullYear();
   const thisYear = new Date().getFullYear();
@@ -61,16 +62,16 @@ function MonthYearToolbar(props: ToolbarProps) {
         <button type="button" aria-label="Next" onClick={() => onNavigate("NEXT")}>›</button>
       </span>
       <span className="cal-toolbar-picks" role="group" aria-label={label}>
-        <select aria-label="Month" value={month} onChange={(e) => goto(Number(e.target.value), year)}>
+        <Select aria-label="Month" value={month} onChange={(e) => goto(Number(e.target.value), year)}>
           {months.map((name, i) => (
             <option key={name} value={i}>{name}</option>
           ))}
-        </select>
-        <select aria-label="Year" value={year} onChange={(e) => goto(month, Number(e.target.value))}>
+        </Select>
+        <Select aria-label="Year" value={year} onChange={(e) => goto(month, Number(e.target.value))}>
           {years.map((y) => (
             <option key={y} value={y}>{y}</option>
           ))}
-        </select>
+        </Select>
       </span>
       <span className="rbc-btn-group cal-views">
         {(["month", "agenda"] as View[]).map((v) => (
@@ -88,7 +89,8 @@ function MonthYearToolbar(props: ToolbarProps) {
   );
 }
 
-function CalendarMonthView({ events, onEdit, onCreateDate }: {
+function CalendarMonthView({ ui, events, onEdit, onCreateDate }: {
+  ui: PluginContext["ui"];
   events: CalendarEvent[];
   onEdit: (e: CalendarEvent) => void;
   onCreateDate: (iso: string) => void;
@@ -132,7 +134,7 @@ function CalendarMonthView({ events, onEdit, onCreateDate }: {
         defaultView="month"
         popup
         selectable
-        components={{ toolbar: MonthYearToolbar }}
+        components={{ toolbar: (tp: ToolbarProps) => <MonthYearToolbar {...tp} ui={ui} /> }}
         onSelectSlot={(slot) => {
           const d = slot.start;
           onCreateDate(toIsoDate(d.getFullYear(), d.getMonth(), d.getDate()));
@@ -152,7 +154,7 @@ function DatePicker({ ui, value, onChange }: {
   value: string;
   onChange: (iso: string) => void;
 }) {
-  const { TextInput } = ui;
+  const { TextInput, Select } = ui;
   const [open, setOpen] = useState(false);
   const [text, setText] = useState(() => dateLabel(value));
   const [bad, setBad] = useState(false);
@@ -170,7 +172,13 @@ function DatePicker({ ui, value, onChange }: {
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
+      if (wrapRef.current?.contains(e.target as Node)) return;
+      // The custom Select renders its options menu in a document.body portal,
+      // which is outside wrapRef — picking a month/year must keep the popover
+      // open.
+      const target = e.target as Element | null;
+      if (target?.closest?.(".st-select-menu")) return;
+      setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setOpen(false);
@@ -265,16 +273,16 @@ function DatePicker({ ui, value, onChange }: {
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
             <button type="button" aria-label="Previous month" onClick={() => step(-1)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-secondary)", fontSize: 16, padding: "2px 8px" }}>‹</button>
             <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-              <select aria-label="Month" value={vm} onChange={(e) => setView(new Date(vy, Number(e.target.value), 1))} className="dp-pick">
+              <Select aria-label="Month" value={vm} className="dp-pick" onChange={(e) => setView(new Date(vy, Number(e.target.value), 1))}>
                 {["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"].map((m, i) => (
                   <option key={m} value={i}>{m}</option>
                 ))}
-              </select>
-              <select aria-label="Year" value={vy} onChange={(e) => setView(new Date(Number(e.target.value), vm, 1))} className="dp-pick">
+              </Select>
+              <Select aria-label="Year" value={vy} className="dp-pick" onChange={(e) => setView(new Date(Number(e.target.value), vm, 1))}>
                 {Array.from({ length: 101 }, (_, i) => new Date().getFullYear() - 50 + i).map((y) => (
                   <option key={y} value={y}>{y}</option>
                 ))}
-              </select>
+              </Select>
             </div>
             <button type="button" aria-label="Next month" onClick={() => step(1)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-secondary)", fontSize: 16, padding: "2px 8px" }}>›</button>
           </div>
@@ -556,6 +564,7 @@ export function CalendarSection({ ctx }: { ctx: PluginContext }) {
       badge={events.length ? `${enabled}/${events.length} on` : undefined}
     >
       <CalendarMonthView
+        ui={ui}
         events={events}
         onEdit={(e) => setEditing(e)}
         onCreateDate={(iso) => setEditing({ ...emptyEvent(), date: iso })}

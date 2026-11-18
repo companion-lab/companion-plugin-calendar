@@ -4,9 +4,15 @@
   "private": true,
   "description": "calendar feature plugin for the Companion app.",
   "author": "Companion Lab",
+  "scripts": {
+    "test": "vitest run"
+  },
   "dependencies": {
     "@companion-lab/plugin": "^0.3.0",
     "react-big-calendar": "^1.19.4",
     "date-fns": "^4.1.0"
+  },
+  "devDependencies": {
+    "vitest": "^5.0.5"
   }
 }
