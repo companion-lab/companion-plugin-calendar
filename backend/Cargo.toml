@@ -1,6 +1,6 @@
 [package]
 name = "calendar-backend"
-version = "0.3.1"
+version = "0.3.2"
 description = "Calendar feature plugin backend for companion-tauri"
 authors = ["Companion Lab"]
 license = "MIT"
