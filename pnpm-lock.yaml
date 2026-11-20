@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@companion-lab/plugin':
-        specifier: ^0.3.0
-        version: 0.3.0(react@19.3.1)
+        specifier: ^0.3.1
+        version: 0.3.1(react@19.3.1)
       date-fns:
         specifier: ^4.1.0
         version: 4.4.0
@@ -28,8 +28,8 @@ packages:
     resolution: {integrity: sha512-Y5tqevQaUAZhhj82BpYMNC1ssvLQTVAfwKdm8iy8qwmhvC2/CpcAu8OC+QEtjM7pMk7knx83u1Qj8gzkicyelw==}
     engines: {node: '>=6.9.0'}
 
-  '@companion-lab/plugin@0.3.0':
-    resolution: {integrity: sha512-YpDe49467WFVMsiOJsgmu34WiS99la+qXnorKuidQB2uqqVl9HtRqvfiToZkYR+8124nE/b63rIm4Ign29ElTw==}
+  '@companion-lab/plugin@0.3.1':
+    resolution: {integrity: sha512-N5DFQYMWNoza4+sL0FI2PB4qBbYi6fLkL4V0u21Dcq66y38V+9wFPk/KUwkZusQSqzx8WH+SiXNgBn0vij5rjw==}
     peerDependencies:
       react: '>=18.0.0'
     peerDependenciesMeta:
@@ -568,7 +568,7 @@ snapshots:
 
   '@babel/runtime@7.29.14': {}
 
-  '@companion-lab/plugin@0.3.0(react@19.3.1)':
+  '@companion-lab/plugin@0.3.1(react@19.3.1)':
     optionalDependencies:
       react: 19.3.1
 

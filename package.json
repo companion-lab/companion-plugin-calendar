@@ -8,9 +8,9 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@companion-lab/plugin": "^0.3.0",
-    "react-big-calendar": "^1.19.4",
-    "date-fns": "^4.1.0"
+    "@companion-lab/plugin": "^0.3.1",
+    "date-fns": "^4.1.0",
+    "react-big-calendar": "^1.19.4"
   },
   "devDependencies": {
     "vitest": "^5.0.5"
