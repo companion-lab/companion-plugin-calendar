@@ -3,7 +3,7 @@
   "name": "Calendar",
   "version": "0.3.2",
   "description": "Dated events, birthdays, and appointments: a settings tab, reminder banners, and calendar tools the avatar can call.",
-  "abi": 2,
+  "abi": 3,
   "permissions": [
     "storage",
     "events",
