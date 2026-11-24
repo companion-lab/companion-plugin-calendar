@@ -906,7 +906,11 @@ const VIEW_CSS = `.cal-month {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  flex-wrap: nowrap;
+  /* The 780px settings window leaves ~400px for this row — narrower than
+     the nav + month/year picks + view switch need. nowrap used to push the
+     view buttons past the box edge where overflow:hidden clipped them. */
+  flex-wrap: wrap;
+  row-gap: 6px;
   border-bottom: 1px solid var(--border-subtle);
 }
 
@@ -925,14 +929,14 @@ const VIEW_CSS = `.cal-month {
   border-top-left-radius: var(--radius-sm);
   border-bottom-left-radius: var(--radius-sm);
   font-size: 13px;
-  padding: 3px 8px;
+  padding: 3px 6px;
 }
 
 .cal-month .cal-nav button:last-child {
   border-top-right-radius: var(--radius-sm);
   border-bottom-right-radius: var(--radius-sm);
   font-size: 13px;
-  padding: 3px 8px;
+  padding: 3px 6px;
 }
 
 .cal-month .cal-views button:first-child {
@@ -982,8 +986,13 @@ const VIEW_CSS = `.cal-month {
   color: var(--text-primary) !important;
   border-radius: var(--radius-sm) !important;
   font-weight: 600 !important;
+  /* Match the 11px toolbar buttons: at the inherited 13px+ the two pickers
+     push the view switch past the toolbar's edge in the settings window.
+     The chevron already sits 8px from the value (flex gap), so 12px of
+     padding clears it with less dead space. */
+  font-size: 12px !important;
   padding: 3px 6px !important;
-  padding-right: 20px !important;
+  padding-right: 12px !important;
   width: auto !important;
 }
 
