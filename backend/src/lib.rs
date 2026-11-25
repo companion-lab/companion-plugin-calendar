@@ -379,6 +379,11 @@ impl Calendar {
             other => return Err(format!("unknown tool: {other}")),
         }?;
         ctx.info(&format!("tool {name}"));
+        // Mutating tools change the stored list: poke the settings panel so
+        // tool-created events show up without a manual tab reload.
+        if matches!(name, "calendar_create" | "calendar_update" | "calendar_delete") {
+            ctx.emit("calendar-changed", &Value::Null);
+        }
         Ok(Value::String(result))
     }
 
@@ -393,6 +398,7 @@ impl Calendar {
                     serde_json::from_value(payload.get("event").cloned().unwrap_or(Value::Null))
                         .map_err(|e| format!("bad event: {e}"))?;
                 let list = self.op_save(event)?;
+                ctx.emit("calendar-changed", &Value::Null);
                 Ok(json!({ "events": list }))
             }
             "calendar.delete" => {
@@ -401,6 +407,7 @@ impl Calendar {
                     .and_then(Value::as_str)
                     .ok_or("id is required")?;
                 let list = self.op_delete(id)?;
+                ctx.emit("calendar-changed", &Value::Null);
                 Ok(json!({ "events": list }))
             }
             "calendar.toggle" => {
@@ -413,6 +420,7 @@ impl Calendar {
                     .and_then(Value::as_bool)
                     .ok_or("enabled is required")?;
                 let list = self.op_toggle(id, enabled)?;
+                ctx.emit("calendar-changed", &Value::Null);
                 Ok(json!({ "events": list }))
             }
             "tool" => {
@@ -924,6 +932,7 @@ export_plugin!(CalendarPlugin::new());
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
 
     fn calendar() -> Calendar {
         let dir = std::env::temp_dir().join(format!(
