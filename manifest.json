@@ -1,7 +1,7 @@
 {
   "id": "calendar",
   "name": "Calendar",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "Dated events, birthdays, and appointments: a settings tab, reminder banners, and calendar tools the avatar can call.",
   "abi": 3,
   "permissions": [
