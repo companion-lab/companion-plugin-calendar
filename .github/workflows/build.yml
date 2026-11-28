@@ -84,6 +84,15 @@ jobs:
           workspaces: backend
           prefix-key: ${{ matrix.platform }}
 
+      # Linux secret storage: keyring's sync-secret-service builds through
+      # dbus → libdbus-sys, which needs the dbus development headers via
+      # pkg-config. (macOS/Windows use native keychain APIs and need nothing.)
+      - name: Install Linux system dependencies
+        if: ${{ runner.os == 'Linux' && hashFiles('backend/Cargo.toml') != '' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
+
       # Plugins that bundle models in assets/ (stt, tts) must fetch them
       # before the build copies assets/ into the package. stt names its
       # script download-moonshine-models.sh, tts download-models.sh —
