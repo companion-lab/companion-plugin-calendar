@@ -13,6 +13,7 @@ import { enUS } from "date-fns/locale";
 import { injectStyles } from "./styles";
 import type { PluginContext } from "@companion-lab/plugin";
 import { useCalendar, type CalendarApi } from "./backend";
+import { GoogleSyncCard } from "./GoogleSyncCard";
 import { TimePicker } from "./TimePicker";
 import { ServerFormModal } from "./ServerFormModal";
 import { ConfirmModal } from "./ConfirmModal";
@@ -22,11 +23,13 @@ import {
   eventStatus,
   eventOccurrencesInRange,
   dateLabel,
+  isGoogleReadonly,
   parseDateInput,
   repeatLabel,
   repeatRule,
   sortEvents,
   toIsoDate,
+  timeLabel,
   type CalendarEvent,
   type Repeat,
 } from "./calendar";
@@ -340,12 +343,14 @@ function DatePicker({ ui, value, onChange }: {
   );
 }
 
-function EventEditor({ ui, initial, onSave, onDelete, onClose }: {
+function EventEditor({ ui, initial, onSave, onDelete, onClose, readOnly }: {
   ui: PluginContext["ui"];
   initial: CalendarEvent;
   onSave: (e: CalendarEvent) => Promise<string | null>;
   onDelete?: () => void;
   onClose: () => void;
+  /** Google-managed rows: details only, edits happen in Google Calendar. */
+  readOnly?: boolean;
 }) {
   const { FormField, Button, TextInput, Select } = ui;
   const [draft, setDraft] = useState<CalendarEvent>({ ...initial });
@@ -353,7 +358,7 @@ function EventEditor({ ui, initial, onSave, onDelete, onClose }: {
   const [error, setError] = useState<string | null>(null);
 
   const rule = repeatRule(draft);
-  const canSave = !!draft.title.trim() && /^\d{4}-\d{2}-\d{2}$/.test(draft.date);
+  const canSave = !readOnly && !!draft.title.trim() && /^\d{4}-\d{2}-\d{2}$/.test(draft.date);
 
   const commit = async () => {
     if (!draft.title.trim()) {
@@ -371,110 +376,139 @@ function EventEditor({ ui, initial, onSave, onDelete, onClose }: {
     else onClose();
   };
 
+  const detail = (label: string, value: string) => (
+    <FormField label={label}>
+      <div className="item-meta" style={{ padding: "6px 0" }}>{value}</div>
+    </FormField>
+  );
+
   return (
     <ServerFormModal
       ui={ui}
-      title={initial.id ? "Edit event" : "New event"}
+      title={readOnly ? "Google event" : initial.id ? "Edit event" : "New event"}
       busy={saving}
       canSave={canSave}
       saveLabel="Save event"
       onSave={commit}
       onClose={onClose}
+      readOnly={readOnly}
       danger={
-        onDelete ? (
+        onDelete && !readOnly ? (
           <Button variant="danger" onClick={onDelete} disabled={saving}>
             Delete
           </Button>
         ) : undefined
       }
     >
-      <FormField label="Title">
-        <TextInput
-          value={draft.title}
-          maxLength={80}
-          placeholder="e.g. Dentist appointment"
-          onChange={(e: React.ChangeEvent<HTMLInputElement>) => setDraft({ ...draft, title: e.target.value })}
-        />
-      </FormField>
-      <FormField label="Date" hint='Type it ("Dec 25", "tomorrow", "2026-12-25") or use the calendar.'>
-        <DatePicker
-          ui={ui}
-          value={draft.date}
-          onChange={(iso) => setDraft({ ...draft, date: iso })}
-        />
-      </FormField>
-      <div className="st-field">
-        <span className="st-field-label">All-day</span>
-        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-          <input
-            type="checkbox"
-            checked={draft.all_day}
-            onChange={(e) => setDraft({ ...draft, all_day: e.target.checked })}
-          />
-          <span className="item-meta">Whole day (fires 9am)</span>
-        </label>
-      </div>
-      {!draft.all_day && (
-        <div className="modal-grid-2">
-          <FormField label="Time" hint='Type it ("3:00 pm", "15:00") or use the clock.'>
-            <TimePicker
-              ui={ui}
-              hour={draft.hour}
-              minute={draft.minute}
-              onChange={(hour, minute) => setDraft({ ...draft, hour, minute })}
-            />
-          </FormField>
-          <FormField label="Ends" hint="Optional, display only. Clear to remove.">
-            <TimePicker
-              ui={ui}
-              hour={draft.end_hour}
-              minute={draft.end_minute}
-              placeholder="No end time"
-              onChange={(h, m) => setDraft({ ...draft, end_hour: h, end_minute: m })}
-              onClear={() => setDraft({ ...draft, end_hour: null, end_minute: null })}
-            />
-          </FormField>
+      {readOnly && (
+        <div className="item-meta" style={{ marginBottom: 4 }}>
+          This event is managed by Google Calendar (repeating events sync one-way into the app).
+          Edit it in Google Calendar and it will update here on the next sync.
         </div>
       )}
-      <div className="st-field">
-        <span className="st-field-label">Repeat</span>
-        <Select
-          aria-label="Repeat"
-          value={rule}
-          style={{ width: "100%" }}
-          onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setDraft({ ...draft, repeat: e.target.value as Repeat })}
-        >
-          {REPEAT_RULES.map((r) => (
-            <option key={r} value={r}>
-              {repeatLabel(r, draft.date)}
-            </option>
-          ))}
-        </Select>
-        <span className="st-field-hint">
-          {rule === "none"
-            ? "Fires once, on the date above."
-            : "Repeats from the start date forward, at the event time."}
-        </span>
-      </div>
-      <FormField label="Details">
-        <TextInput
-          value={draft.description}
-          maxLength={280}
-          placeholder="e.g. Bring insurance card"
-          onChange={(e: React.ChangeEvent<HTMLInputElement>) => setDraft({ ...draft, description: e.target.value })}
-        />
-      </FormField>
-      <FormField
-        label="Spoken message"
-        hint="Said out loud when the event fires. Empty = title only."
-      >
-        <TextInput
-          value={draft.message}
-          maxLength={280}
-          placeholder="e.g. Dentist in thirty minutes"
-          onChange={(e: React.ChangeEvent<HTMLInputElement>) => setDraft({ ...draft, message: e.target.value })}
-        />
-      </FormField>
+      {readOnly ? (
+        <>
+          {detail("Title", draft.title || "(untitled)")}
+          {detail(
+            "When",
+            draft.all_day
+              ? `${dateLabel(draft.date)} • all day`
+              : `${dateLabel(draft.date)} • ${timeLabel(draft.hour, draft.minute)}`,
+          )}
+          {rule !== "none" && detail("Repeat", repeatLabel(rule, draft.date))}
+          {draft.description && detail("Details", draft.description)}
+        </>
+      ) : (
+        <>
+          <FormField label="Title">
+            <TextInput
+              value={draft.title}
+              maxLength={80}
+              placeholder="e.g. Dentist appointment"
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setDraft({ ...draft, title: e.target.value })}
+            />
+          </FormField>
+          <FormField label="Date" hint='Type it ("Dec 25", "tomorrow", "2026-12-25") or use the calendar.'>
+            <DatePicker
+              ui={ui}
+              value={draft.date}
+              onChange={(iso) => setDraft({ ...draft, date: iso })}
+            />
+          </FormField>
+          <div className="st-field">
+            <span className="st-field-label">All-day</span>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={draft.all_day}
+                onChange={(e) => setDraft({ ...draft, all_day: e.target.checked })}
+              />
+              <span className="item-meta">Whole day (fires 9am)</span>
+            </label>
+          </div>
+          {!draft.all_day && (
+            <div className="modal-grid-2">
+              <FormField label="Time" hint='Type it ("3:00 pm", "15:00") or use the clock.'>
+                <TimePicker
+                  ui={ui}
+                  hour={draft.hour}
+                  minute={draft.minute}
+                  onChange={(hour, minute) => setDraft({ ...draft, hour, minute })}
+                />
+              </FormField>
+              <FormField label="Ends" hint="Optional, display only. Clear to remove.">
+                <TimePicker
+                  ui={ui}
+                  hour={draft.end_hour}
+                  minute={draft.end_minute}
+                  placeholder="No end time"
+                  onChange={(h, m) => setDraft({ ...draft, end_hour: h, end_minute: m })}
+                  onClear={() => setDraft({ ...draft, end_hour: null, end_minute: null })}
+                />
+              </FormField>
+            </div>
+          )}
+          <div className="st-field">
+            <span className="st-field-label">Repeat</span>
+            <Select
+              aria-label="Repeat"
+              value={rule}
+              style={{ width: "100%" }}
+              onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setDraft({ ...draft, repeat: e.target.value as Repeat })}
+            >
+              {REPEAT_RULES.map((r) => (
+                <option key={r} value={r}>
+                  {repeatLabel(r, draft.date)}
+                </option>
+              ))}
+            </Select>
+            <span className="st-field-hint">
+              {rule === "none"
+                ? "Fires once, on the date above."
+                : "Repeats from the start date forward, at the event time."}
+            </span>
+          </div>
+          <FormField label="Details">
+            <TextInput
+              value={draft.description}
+              maxLength={280}
+              placeholder="e.g. Bring insurance card"
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setDraft({ ...draft, description: e.target.value })}
+            />
+          </FormField>
+          <FormField
+            label="Spoken message"
+            hint="Said out loud when the event fires. Empty = title only."
+          >
+            <TextInput
+              value={draft.message}
+              maxLength={280}
+              placeholder="e.g. Dentist in thirty minutes"
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setDraft({ ...draft, message: e.target.value })}
+            />
+          </FormField>
+        </>
+      )}
       {error && <div className="error-banner">{error}</div>}
     </ServerFormModal>
   );
@@ -496,6 +530,7 @@ function EventRow({ ui, api, e, onEdit, onDelete, onToggle }: {
       console.error("calendar test failed", err);
     }
   };
+  const readonly = isGoogleReadonly(e);
 
   return (
     <div className={`item-row${e.enabled ? "" : " item-row-dim"}`} style={{ display: "block" }}>
@@ -511,24 +546,45 @@ function EventRow({ ui, api, e, onEdit, onDelete, onToggle }: {
           <div className="item-title">
             📅 {eventLabel(e)}
             {e.title ? ` • ${e.title}` : ""}
+            {readonly && (
+              <span
+                title="Synced from Google Calendar (read-only)"
+                style={{
+                  marginLeft: 6,
+                  fontSize: 10,
+                  fontWeight: 600,
+                  padding: "1px 6px",
+                  borderRadius: 999,
+                  border: "1px solid var(--border-subtle)",
+                  opacity: 0.8,
+                }}
+              >
+                G
+              </span>
+            )}
           </div>
           <div className="item-meta">
             {eventStatus(e)}
             {e.end_hour != null && e.end_minute != null && !e.all_day
               ? ` • ends ${String(e.end_hour).padStart(2, "0")}:${String(e.end_minute).padStart(2, "0")}`
               : ""}
+            {readonly ? " • from Google Calendar" : ""}
           </div>
         </div>
         <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
           <Button variant="primary" onClick={test} style={{ padding: "5px 10px", fontSize: 11 }}>
             Test
           </Button>
-          <Button variant="secondary" onClick={onEdit} style={{ padding: "5px 10px", fontSize: 11 }}>
-            Edit
-          </Button>
-          <Button variant="danger" onClick={onDelete} style={{ padding: "5px 10px", fontSize: 11 }}>
-            Delete
-          </Button>
+          {!readonly && (
+            <>
+              <Button variant="secondary" onClick={onEdit} style={{ padding: "5px 10px", fontSize: 11 }}>
+                Edit
+              </Button>
+              <Button variant="danger" onClick={onDelete} style={{ padding: "5px 10px", fontSize: 11 }}>
+                Delete
+              </Button>
+            </>
+          )}
         </div>
       </div>
       {!e.enabled && <div className="item-meta">paused</div>}
@@ -563,6 +619,7 @@ export function CalendarSection({ ctx }: { ctx: PluginContext }) {
       title="Calendar"
       badge={events.length ? `${enabled}/${events.length} on` : undefined}
     >
+      <GoogleSyncCard ctx={ctx} />
       <CalendarMonthView
         ui={ui}
         events={events}
@@ -595,8 +652,9 @@ export function CalendarSection({ ctx }: { ctx: PluginContext }) {
           initial={editing}
           onSave={save}
           onClose={() => setEditing(null)}
+          readOnly={isGoogleReadonly(editing)}
           onDelete={
-            editing.id
+            editing.id && !isGoogleReadonly(editing)
               ? () => {
                   const doomed = editing;
                   setEditing(null);

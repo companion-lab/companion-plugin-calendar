@@ -41,6 +41,50 @@ companion-cli build /path/to/companion-plugin-calendar --backend
 Install dependencies first if you use a package manager lockfile
 (`pnpm install` / `npm install`).
 
+## Google Calendar sync
+
+The plugin can two-way sync with Google Calendar. Setup (one time, per user):
+
+1. In [Google Cloud Console](https://console.cloud.google.com/), create (or
+   pick) a project and **enable the Google Calendar API** for it.
+2. Configure the **OAuth consent screen** (type *External*; while the app is
+   unverified, add your own account as a *test user*).
+3. Create **Credentials → OAuth client ID → Desktop app** and copy the
+   client ID and client secret.
+4. In the app: **Settings → Calendar → Google Calendar**, paste both values
+   and hit **Connect Google account**. The consent screen opens in your
+   browser and redirects to a local loopback server (`http://127.0.0.1:<port>`,
+   per RFC 8252); pick the calendars to sync afterwards.
+
+How the sync behaves:
+
+- **Pull**: selected calendars are pulled incrementally (Google syncToken,
+  5-minute error backoff, full resync when the token expires). Google
+  deletions/cancellations remove the local copies.
+- **Push**: events created or edited in the app (settings UI or chat tools)
+  are queued and pushed to your **default calendar**; deletions push too.
+- **Reminders**: synced Google events fire the same reminder banner as local
+  events. Pausing an event (`enabled` toggle) is app-only.
+- **Recurrence**: Google rules that map cleanly onto the local repeat
+  options (daily / weekdays / weekly / monthly / yearly) become repeating
+  local events. Anything more complex (COUNT, UNTIL, exotic BYDAY, EXDATE,
+  overrides) is expanded into concrete occurrences inside a
+  past-7-days → future-90-days window; those rows are read-only.
+- **Editing**: non-repeating Google events are editable here and push back.
+  Repeating Google events are managed in Google Calendar (the app shows them
+  read-only); repeating events created in the app push as RRULEs.
+- **Conflicts**: last write wins per sync cycle; a local edit waiting in the
+  push queue is never overwritten by a pull.
+- **Storage**: events and sync state live in SQLite
+  (`plugins-data/calendar/calendar.db`); OAuth tokens and the client secret
+  live in the OS keychain. Disconnecting revokes the token and stops syncing
+  but keeps already-synced events.
+
+The legacy `calendar.json` store is imported into SQLite automatically on
+first run of this version (renamed to `calendar.json.bak`). This is a
+one-way migration: older app/plugin versions won't see events stored in
+SQLite.
+
 ## Downloading releases
 
 CI builds installable zips on every push to `main` (the "Build plugin"

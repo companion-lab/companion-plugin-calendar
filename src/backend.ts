@@ -7,6 +7,73 @@ import type { CalendarEvent } from "./calendar";
 
 type ListReply = { events: CalendarEvent[] };
 
+// -- Google Calendar sync ---------------------------------------------------
+
+export type GoogleCalendarSummary = {
+  id: string;
+  summary: string;
+  primary: boolean;
+  access_role: string;
+};
+
+export type GoogleStatus = {
+  available: boolean;
+  connected: boolean;
+  /** "disconnected" | "awaiting_callback" | "connected" | "needs_login" */
+  phase: string;
+  account: string | null;
+  syncing: boolean;
+  error: string | null;
+  client_id_set: boolean;
+  selected_calendars: string[];
+  default_calendar: string | null;
+  interval_minutes: number;
+  last_sync: number | null;
+  queue_len: number;
+};
+
+export type GoogleConfig = {
+  selected_calendars?: string[];
+  default_calendar?: string;
+  interval_minutes?: number;
+};
+
+export function makeGoogleApi(ctx: PluginContext) {
+  return {
+    status: () => ctx.backend.call<GoogleStatus>("google.status"),
+    connect: (client_id: string, client_secret: string) =>
+      ctx.backend.call<{ auth_url: string }>("google.connect", { client_id, client_secret }),
+    disconnect: () => ctx.backend.call<{ ok: boolean }>("google.disconnect"),
+    calendars: () =>
+      ctx.backend
+        .call<{ calendars: GoogleCalendarSummary[] }>("google.calendars")
+        .then((r) => r.calendars),
+    saveConfig: (cfg: GoogleConfig) => ctx.backend.call<{ ok: boolean }>("google.save_config", cfg),
+    syncNow: () => ctx.backend.call<{ ok: boolean }>("google.sync_now"),
+  };
+}
+
+export type GoogleApi = ReturnType<typeof makeGoogleApi>;
+
+/** Live Google-sync status: refreshed on push events from the backend. */
+export function useGoogleStatus(ctx: PluginContext) {
+  const api = makeGoogleApi(ctx);
+  const [status, setStatus] = useState<GoogleStatus | null>(null);
+  const refresh = useCallback(async () => {
+    try {
+      setStatus(await api.status());
+    } catch {
+      // Backend not ready yet; the next push event re-syncs.
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => {
+    void refresh();
+    return ctx.events.on("google-status-changed", () => void refresh());
+  }, [refresh, ctx]);
+  return { status, refresh, api };
+}
+
 export function makeCalendarApi(ctx: PluginContext) {
   return {
     list: () => ctx.backend.call<ListReply>("calendar.list").then((r) => r.events),

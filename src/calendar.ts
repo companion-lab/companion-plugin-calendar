@@ -19,6 +19,14 @@ export type CalendarEvent = {
   message: string;
   enabled: boolean;
   last_fired?: number | null;
+  /** "google" for events synced from Google Calendar; absent when local. */
+  source?: string | null;
+  google_calendar_id?: string | null;
+  google_event_id?: string | null;
+  /** Google-managed rows (series mappings / expanded instances) are read-only. */
+  google_readonly?: boolean;
+  /** Epoch millis of the last local edit. */
+  updated_at?: number | null;
 };
 
 export type Repeatable = Pick<
@@ -30,6 +38,18 @@ export type Repeatable = Pick<
 /// legacy `repeat_yearly` bool.
 export function repeatRule(e: Pick<CalendarEvent, "repeat" | "repeat_yearly">): Repeat {
   return e.repeat ?? (e.repeat_yearly ? "yearly" : "none");
+}
+
+/// True for events synced from Google Calendar.
+export function isGoogleEvent(e: Pick<CalendarEvent, "source">): boolean {
+  return e.source === "google";
+}
+
+/// True when the row is Google-managed (a recurring series mapping or an
+/// expanded recurrence instance): editing it here would not stick, so the
+/// editor is disabled and edits happen in Google Calendar.
+export function isGoogleReadonly(e: Pick<CalendarEvent, "source" | "google_readonly">): boolean {
+  return e.source === "google" && e.google_readonly === true;
 }
 
 const WEEKDAY_LONG = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];

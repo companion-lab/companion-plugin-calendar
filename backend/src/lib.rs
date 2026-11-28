@@ -3,22 +3,36 @@
 //! Port of the former host module `src-tauri/src/calendar.rs` plus the
 //! model-facing calendar tools from the former builtin MCP server in `mcp.rs`.
 //!
-//! - Storage: `{data_dir}/calendar.json` (migrated from the legacy
-//!   `{app_data}/calendar.json` by the host).
+//! - Storage: SQLite at `{data_dir}/calendar.db` (migrated from the legacy
+//!   `calendar.json` on first run) — see `store.rs`.
+//! - Google Calendar two-way sync with OAuth, incremental pulls and a push
+//!   queue — see `google_sync.rs`.
 //! - Scheduler: a plain 20s thread; on fire it emits the namespaced event
 //!   `plugin:calendar:alarm-fired` with the same payload shape alarms use, so
 //!   reminder banners speak the same protocol.
 //! - Tools: `calendar_list/create/update/delete` reach the chat model as
 //!   `calendar__<name>`.
 
+mod google_api;
+mod google_oauth;
+mod google_sync;
+mod store;
+
 use chrono::{Datelike, Local, NaiveDate, Timelike};
 use companion_plugin_sdk::{export_plugin, Plugin, PluginCtx, ToolDef};
+use google_sync::SyncHandle;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+fn now_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
 
 /// Google-style repeat rule. `weekly`/`monthly`/`yearly` derive their
 /// pattern from the event's start date ("Weekly on Tuesday").
@@ -70,6 +84,22 @@ pub struct CalendarEvent {
     /// Minutes since epoch of the last fire, so a tick never double-fires.
     #[serde(default)]
     pub last_fired: Option<i64>,
+    /// Origin: `"google"` for rows synced from Google Calendar, absent for
+    /// locally-created events.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// Google sync bookkeeping (set once an event is linked to Google).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub google_calendar_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub google_event_id: Option<String>,
+    /// True for Google-managed rows the app cannot edit (series mappings
+    /// and expanded recurrence instances).
+    #[serde(default)]
+    pub google_readonly: bool,
+    /// Epoch millis of the last local edit (last-write-wins marker).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<i64>,
 }
 
 impl CalendarEvent {
@@ -94,54 +124,52 @@ fn default_nine() -> u8 {
 
 struct Calendar {
     events: Arc<Mutex<Vec<CalendarEvent>>>,
-    data_dir: PathBuf,
+    store: Arc<store::Store>,
     stop: Arc<AtomicBool>,
+    sync: Option<SyncHandle>,
 }
 
 impl Calendar {
     fn load(&mut self) {
-        let path = self.data_dir.join("calendar.json");
-        let list: Vec<CalendarEvent> = match std::fs::read_to_string(&path) {
-            Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
-            Err(_) => Vec::new(),
-        };
+        let list = self.store.load_events();
         if let Ok(mut guard) = self.events.lock() {
             *guard = list;
         }
     }
 
-    fn write(&self, list: &[CalendarEvent]) -> Result<(), String> {
-        let path = self.data_dir.join("calendar.json");
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-        let json = serde_json::to_string_pretty(list).map_err(|e| e.to_string())?;
-        std::fs::write(&path, json).map_err(|e| format!("write calendar: {e}"))
-    }
-
-    fn persist(&self) -> Result<Vec<CalendarEvent>, String> {
-        let list = self.events.lock().map_err(|e| e.to_string())?.clone();
-        self.write(&list)?;
-        Ok(list)
-    }
-
     fn op_save(&self, event: CalendarEvent) -> Result<Vec<CalendarEvent>, String> {
         let mut e = event;
         sanitize(&mut e)?;
-        let mut guard = self.events.lock().map_err(|e| e.to_string())?;
-        match guard.iter().position(|x| x.id == e.id) {
-            Some(i) => guard[i] = e,
-            None => guard.push(e),
+        // Last local edit wins over Google on the next pull.
+        e.updated_at = Some(now_millis());
+        {
+            let mut guard = self.events.lock().map_err(|e| e.to_string())?;
+            match guard.iter().position(|x| x.id == e.id) {
+                Some(i) => guard[i] = e.clone(),
+                None => guard.push(e.clone()),
+            }
         }
-        drop(guard);
-        self.persist()
+        self.store.upsert_event(&e)?;
+        if let Some(sync) = &self.sync {
+            sync.enqueue_upsert(&e);
+        }
+        let list = self.events.lock().map_err(|e| e.to_string())?.clone();
+        Ok(list)
     }
 
     fn op_delete(&self, id: &str) -> Result<Vec<CalendarEvent>, String> {
-        let mut guard = self.events.lock().map_err(|e| e.to_string())?;
-        guard.retain(|e| e.id != id);
-        drop(guard);
-        self.persist()
+        let removed = {
+            let mut guard = self.events.lock().map_err(|e| e.to_string())?;
+            let removed = guard.iter().find(|e| e.id == id).cloned();
+            guard.retain(|e| e.id != id);
+            removed
+        };
+        self.store.delete_event(id)?;
+        if let (Some(sync), Some(e)) = (&self.sync, &removed) {
+            sync.enqueue_delete(e);
+        }
+        let list = self.events.lock().map_err(|e| e.to_string())?.clone();
+        Ok(list)
     }
 
     fn op_toggle(&self, id: &str, enabled: bool) -> Result<Vec<CalendarEvent>, String> {
@@ -154,7 +182,10 @@ impl Calendar {
                 }
             }
         }
-        self.persist()
+        // App-only flag: the enabled toggle is not pushed to Google.
+        self.store.set_enabled(id, enabled, enabled)?;
+        let list = self.events.lock().map_err(|e| e.to_string())?.clone();
+        Ok(list)
     }
 
     // -- model-facing tools (former builtin MCP server) ---------------------
@@ -249,6 +280,11 @@ impl Calendar {
             message: arg_str(args, "message"),
             enabled: true,
             last_fired: None,
+            source: None,
+            google_calendar_id: None,
+            google_event_id: None,
+            google_readonly: false,
+            updated_at: None,
         };
         let title = if event.title.is_empty() {
             "Event".to_string()
@@ -431,9 +467,165 @@ impl Calendar {
                 let args = payload.get("args").cloned().unwrap_or(Value::Null);
                 self.handle_tool(ctx, name, args)
             }
+            "google.status" => self.google_status(),
+            "google.connect" => {
+                let sync = self.sync.as_ref().ok_or("sync worker unavailable")?;
+                let client_id = payload
+                    .get("client_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let client_secret = payload
+                    .get("client_secret")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let auth_url = sync.start_connect(&client_id, &client_secret)?;
+                Ok(json!({ "auth_url": auth_url }))
+            }
+            "google.disconnect" => {
+                let sync = self.sync.as_ref().ok_or("sync worker unavailable")?;
+                sync.disconnect()?;
+                Ok(json!({ "ok": true }))
+            }
+            "google.calendars" => {
+                let calendars = self.google_calendars()?;
+                Ok(json!({ "calendars": calendars }))
+            }
+            "google.save_config" => {
+                self.google_save_config(&payload)?;
+                if let Some(sync) = &self.sync {
+                    sync.config_changed();
+                }
+                Ok(json!({ "ok": true }))
+            }
+            "google.sync_now" => {
+                if let Some(sync) = &self.sync {
+                    sync.sync_now();
+                }
+                Ok(json!({ "ok": true }))
+            }
             "calendar.ping" => Ok(json!({ "pong": true })),
             other => Err(format!("unknown method: {other}")),
         }
+    }
+
+    // -- Google Calendar sync (route handlers) -------------------------------
+
+    fn google_status(&self) -> Result<Value, String> {
+        let Some(sync) = &self.sync else {
+            return Ok(json!({ "available": false }));
+        };
+        let snap = sync.snapshot();
+        let selected: Vec<String> = self
+            .store
+            .config_get(google_sync::CONFIG_SELECTED)
+            .and_then(|v| serde_json::from_str(&v).ok())
+            .unwrap_or_default();
+        Ok(json!({
+            "available": true,
+            "connected": snap.connected,
+            "phase": snap.phase,
+            "account": snap.account,
+            "syncing": snap.syncing,
+            "error": snap.last_error,
+            "client_id_set": self
+                .store
+                .config_get(google_sync::CONFIG_CLIENT_ID)
+                .map(|s| !s.is_empty())
+                .unwrap_or(false),
+            "selected_calendars": selected,
+            "default_calendar": self
+                .store
+                .config_get(google_sync::CONFIG_DEFAULT)
+                .filter(|s| !s.is_empty()),
+            "interval_minutes": self
+                .store
+                .config_get(google_sync::CONFIG_INTERVAL)
+                .and_then(|v| v.parse::<i64>().ok())
+                .filter(|v| *v > 0)
+                .unwrap_or(google_sync::DEFAULT_INTERVAL_MIN),
+            "last_sync": self.store.last_sync(),
+            "queue_len": self.store.queue_count(),
+        }))
+    }
+
+    /// calendarList from Google, primary calendar first then alphabetical.
+    fn google_calendars(&self) -> Result<Vec<Value>, String> {
+        let sync = self.sync.as_ref().ok_or("sync worker unavailable")?;
+        if !sync.connected() {
+            return Err("not connected to Google".into());
+        }
+        let client_id = self
+            .store
+            .config_get(google_sync::CONFIG_CLIENT_ID)
+            .ok_or("not configured")?;
+        let mut blob = google_oauth::load_blob();
+        let tokens = blob.tokens.take().ok_or("not signed in")?;
+        let secret = blob
+            .client_secret
+            .clone()
+            .ok_or("client secret missing — sign in again")?;
+        let api = google_api::GoogleApi::new().map_err(|e| e)?;
+        let tokens = google_sync::ensure_tokens(&client_id, &secret, tokens)?;
+        blob.tokens = Some(tokens.clone());
+        google_oauth::save_blob(&blob)?;
+        let mut list = api
+            .calendar_list(&tokens.access_token)
+            .map_err(|e| e.to_string())?;
+        list.sort_by(|a, b| {
+            b.primary
+                .cmp(&a.primary)
+                .then_with(|| a.summary.to_lowercase().cmp(&b.summary.to_lowercase()))
+        });
+        Ok(list
+            .into_iter()
+            .map(|c| {
+                json!({
+                    "id": c.id,
+                    "summary": c.summary,
+                    "primary": c.primary,
+                    "access_role": c.access_role,
+                })
+            })
+            .collect())
+    }
+
+    fn google_save_config(&self, payload: &Value) -> Result<(), String> {
+        if let Some(selected) = payload.get("selected_calendars").and_then(Value::as_array) {
+            let ids: Vec<String> = selected
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect();
+            self.store.config_set(
+                google_sync::CONFIG_SELECTED,
+                &serde_json::to_string(&ids).map_err(|e| e.to_string())?,
+            )?;
+            // Keep the push target valid when the old default was deselected.
+            if let Some(default) = self.store.config_get(google_sync::CONFIG_DEFAULT) {
+                if !default.is_empty() && !ids.contains(&default) {
+                    let _ = self.store.config_delete(google_sync::CONFIG_DEFAULT);
+                }
+            }
+        }
+        if let Some(default) = payload.get("default_calendar").and_then(Value::as_str) {
+            if default.is_empty() {
+                let _ = self.store.config_delete(google_sync::CONFIG_DEFAULT);
+            } else {
+                self.store
+                    .config_set(google_sync::CONFIG_DEFAULT, default)?;
+            }
+        }
+        if let Some(interval) = payload
+            .get("interval_minutes")
+            .and_then(Value::as_i64)
+            .filter(|v| *v > 0)
+        {
+            self.store
+                .config_set(google_sync::CONFIG_INTERVAL, &interval.to_string())?;
+        }
+        Ok(())
     }
 }
 
@@ -524,8 +716,11 @@ fn sanitize(ev: &mut CalendarEvent) -> Result<(), String> {
         .ok_or_else(|| "could not read the date. Use YYYY-MM-DD, 'today', 'tomorrow', 'Dec 25', or a weekday name.".to_string())?;
     let today = Local::now().date_naive();
     // Only one-shots must start in the future; a recurring event may begin
-    // in the past (its upcoming occurrences are what fire).
-    if ev.repeat_rule() == Repeat::None && d < today {
+    // in the past (its upcoming occurrences are what fire). Google-owned
+    // events may also sit in the past — they are pulled from a 7-day
+    // lookback window and stay editable (edits push back to Google).
+    let google_editable = ev.source.as_deref() == Some("google") && !ev.google_readonly;
+    if !google_editable && ev.repeat_rule() == Repeat::None && d < today {
         return Err(
             "that date is in the past. Pick today or a future date, or set a repeat option.".into(),
         );
@@ -604,15 +799,12 @@ fn is_due(ev: &CalendarEvent, now: chrono::DateTime<Local>, minute_stamp: i64) -
     ev.last_fired != Some(minute_stamp)
 }
 
-fn tick(
-    events: &Mutex<Vec<CalendarEvent>>,
-    write: &dyn Fn(&[CalendarEvent]) -> Result<(), String>,
-) -> Vec<FiredEvent> {
+fn tick(events: &Mutex<Vec<CalendarEvent>>) -> (Vec<FiredEvent>, Vec<CalendarEvent>) {
     let now = Local::now();
     let minute_stamp = now.timestamp() / 60;
     let mut fired: Vec<FiredEvent> = Vec::new();
+    let mut changed: Vec<CalendarEvent> = Vec::new();
     if let Ok(mut guard) = events.lock() {
-        let mut changed = false;
         for ev in guard.iter_mut() {
             if !is_due(ev, now, minute_stamp) {
                 continue;
@@ -633,16 +825,10 @@ fn tick(
                 message: ev.message.clone(),
                 loop_sound: false,
             });
-            changed = true;
-        }
-        if changed {
-            let snapshot = guard.clone();
-            if let Err(e) = write(&snapshot) {
-                eprintln!("[calendar] persist failed: {e}");
-            }
+            changed.push(ev.clone());
         }
     }
-    fired
+    (fired, changed)
 }
 
 /// Same wire shape as the alarms plugin's `alarm-fired` payload, so reminder
@@ -658,7 +844,7 @@ pub struct FiredEvent {
 fn spawn_scheduler(
     ctx: PluginCtx,
     events: Arc<Mutex<Vec<CalendarEvent>>>,
-    data_dir: PathBuf,
+    store: Arc<store::Store>,
     stop: Arc<AtomicBool>,
 ) {
     std::thread::Builder::new()
@@ -673,15 +859,13 @@ fn spawn_scheduler(
                 if stop.load(Ordering::Relaxed) {
                     break;
                 }
-                let write = |list: &[CalendarEvent]| -> Result<(), String> {
-                    let path = data_dir.join("calendar.json");
-                    if let Some(parent) = path.parent() {
-                        let _ = std::fs::create_dir_all(parent);
+                let (fired, changed) = tick(&events);
+                if !changed.is_empty() {
+                    if let Err(e) = store.upsert_events(&changed) {
+                        eprintln!("[calendar] persist failed: {e}");
                     }
-                    let json = serde_json::to_string_pretty(list).map_err(|e| e.to_string())?;
-                    std::fs::write(&path, json).map_err(|e| format!("write calendar: {e}"))
-                };
-                for f in tick(&events, &write) {
+                }
+                for f in fired {
                     ctx.info(&format!("fired {}", f.id));
                     ctx.emit(
                         "alarm-fired",
@@ -890,16 +1074,29 @@ impl Plugin for CalendarPlugin {
     fn init(&mut self, ctx: PluginCtx) -> Result<(), String> {
         let data_dir = ctx.data_dir().ok_or("host did not provide a data dir")?;
         std::fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
+        let store = Arc::new(store::Store::open(&data_dir)?);
+        match store.migrate_from_json(&data_dir) {
+            Ok(0) => {}
+            Ok(n) => ctx.info(&format!("migrated {n} events from calendar.json")),
+            Err(e) => ctx.warn(&format!("calendar.json migration skipped: {e}")),
+        }
         let mut calendar = Calendar {
             events: Arc::new(Mutex::new(Vec::new())),
-            data_dir,
+            store: Arc::clone(&store),
             stop: Arc::new(AtomicBool::new(false)),
+            sync: None,
         };
         calendar.load();
+        calendar.sync = Some(google_sync::spawn_sync_worker(
+            ctx.clone(),
+            Arc::clone(&calendar.events),
+            Arc::clone(&store),
+            Arc::clone(&calendar.stop),
+        ));
         spawn_scheduler(
             ctx.clone(),
             Arc::clone(&calendar.events),
-            calendar.data_dir.clone(),
+            store,
             Arc::clone(&calendar.stop),
         );
         ctx.info("calendar ready");
@@ -945,8 +1142,9 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         Calendar {
             events: Arc::new(Mutex::new(Vec::new())),
-            data_dir: dir,
+            store: Arc::new(store::Store::open(&dir).unwrap()),
             stop: Arc::new(AtomicBool::new(false)),
+            sync: None,
         }
     }
 
@@ -966,6 +1164,11 @@ mod tests {
             message: String::new(),
             enabled: true,
             last_fired: None,
+            source: None,
+            google_calendar_id: None,
+            google_event_id: None,
+            google_readonly: false,
+            updated_at: None,
         }
     }
 
@@ -1150,6 +1353,33 @@ mod tests {
         assert!(!list[0].id.is_empty());
         let out = c.tool_list().unwrap();
         assert!(out.contains("Dentist"), "{out}");
+    }
+
+    #[test]
+    fn saves_persist_through_sqlite() {
+        let c = calendar();
+        c.op_save(event("2030-03-10", 9, 0)).unwrap();
+        let loaded = c.store.load_events();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].title, "Dentist");
+        assert_eq!(loaded[0].date, "2030-03-10");
+        c.op_delete("e").unwrap();
+        assert!(c.store.load_events().is_empty());
+        assert_eq!(c.store.count_events(), 0);
+    }
+
+    #[test]
+    fn google_editable_events_may_sit_in_the_past() {
+        // Pulled from the 7-day lookback window and pushed back on edit.
+        let mut e = event("2000-01-01", 9, 0);
+        e.source = Some("google".into());
+        e.google_readonly = false;
+        sanitize(&mut e).unwrap();
+        // Google-managed rows still behave like local ones here.
+        let mut ro = event("2000-01-01", 9, 0);
+        ro.source = Some("google".into());
+        ro.google_readonly = true;
+        assert!(sanitize(&mut ro).is_err());
     }
 
     #[test]
