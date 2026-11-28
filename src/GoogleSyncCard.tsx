@@ -157,6 +157,9 @@ export function GoogleSyncCard({ ctx }: { ctx: PluginContext }) {
         display: "flex",
         flexDirection: "column",
         gap: 10,
+        // Allow shrinking below the content's min width inside flex parents,
+        // so long unbreakable strings (calendar ids) can't widen the card.
+        minWidth: 0,
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -265,20 +268,26 @@ export function GoogleSyncCard({ ctx }: { ctx: PluginContext }) {
               <div className="item-meta">Loading calendars…</div>
             )}
             {calendars != null && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 6 }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 6 }}>
                 {calendars.map((c) => (
                   <label
                     key={c.id}
-                    style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
+                    style={{ display: "flex", flexDirection: "column", gap: 1, cursor: "pointer", minWidth: 0 }}
                   >
-                    <input
-                      type="checkbox"
-                      checked={selectedSet.has(c.id)}
-                      onChange={(e) => toggleCalendar(c.id, e.target.checked)}
-                    />
-                    <span style={{ fontSize: 13 }}>{c.summary}</span>
-                    {c.primary && <span className="item-meta">primary</span>}
-                    <span className="item-meta">{c.id}</span>
+                    <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <input
+                        type="checkbox"
+                        checked={selectedSet.has(c.id)}
+                        onChange={(e) => toggleCalendar(c.id, e.target.checked)}
+                      />
+                      <span style={{ fontSize: 13 }}>{c.summary}</span>
+                      {c.primary && <span className="item-meta">primary</span>}
+                    </span>
+                    {/* Calendar ids are long unbreakable emails; keep them on
+                        their own wrapping line so they can't widen the card. */}
+                    <span className="item-meta" style={{ paddingLeft: 22, wordBreak: "break-all" }}>
+                      {c.id}
+                    </span>
                   </label>
                 ))}
                 {calendars.length === 0 && (
