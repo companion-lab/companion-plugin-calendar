@@ -287,8 +287,9 @@ export function GoogleSyncCard({ ctx }: { ctx: PluginContext }) {
               </div>
             )}
             <span className="st-field-hint">
-              Selected calendars are pulled into this calendar. Changes sync both ways
-              (non-repeating events are editable here).
+              Selected calendars are pulled into this calendar. Events sync both ways —
+              edit them here and changes push back to Google. Complex Google repeats
+              simplify to the app's repeat options.
             </span>
           </div>
 

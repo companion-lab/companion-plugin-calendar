@@ -65,14 +65,15 @@ How the sync behaves:
   are queued and pushed to your **default calendar**; deletions push too.
 - **Reminders**: synced Google events fire the same reminder banner as local
   events. Pausing an event (`enabled` toggle) is app-only.
-- **Recurrence**: Google rules that map cleanly onto the local repeat
-  options (daily / weekdays / weekly / monthly / yearly) become repeating
-  local events. Anything more complex (COUNT, UNTIL, exotic BYDAY, EXDATE,
-  overrides) is expanded into concrete occurrences inside a
-  past-7-days → future-90-days window; those rows are read-only.
-- **Editing**: non-repeating Google events are editable here and push back.
-  Repeating Google events are managed in Google Calendar (the app shows them
-  read-only); repeating events created in the app push as RRULEs.
+- **Recurrence**: every Google event — recurring or not — is stored as a
+  single local-style row, exactly like events created in the app. RRULEs map
+  onto the closest local repeat option (daily / weekdays / weekly / monthly
+  / yearly). Qualifiers the local model cannot represent (COUNT, UNTIL,
+  EXDATE, exotic BYDAY sets, per-instance overrides) are simplified away:
+  the series repeats forever locally, and deleted or moved single
+  occurrences may not mirror Google exactly.
+- **Editing**: all synced Google events are editable in the app and push
+  back to Google; repeating events created in the app push as RRULEs.
 - **Conflicts**: last write wins per sync cycle; a local edit waiting in the
   push queue is never overwritten by a pull.
 - **Storage**: events and sync state live in SQLite
@@ -80,6 +81,9 @@ How the sync behaves:
   live in the OS keychain. Disconnecting revokes the token and stops syncing
   but keeps already-synced events.
 
+Older plugin versions expanded complex recurring series into per-date
+read-only rows; the first run of 0.7.0+ drops those rows and re-pulls each
+calendar so every Google event becomes a single editable row.
 The legacy `calendar.json` store is imported into SQLite automatically on
 first run of this version (renamed to `calendar.json.bak`). This is a
 one-way migration: older app/plugin versions won't see events stored in

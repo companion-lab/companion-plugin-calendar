@@ -61,7 +61,6 @@ impl Store {
                 source TEXT,
                 google_calendar_id TEXT,
                 google_event_id TEXT,
-                google_readonly INTEGER NOT NULL DEFAULT 0,
                 updated_at INTEGER
             );
             CREATE INDEX IF NOT EXISTS idx_events_google
@@ -144,7 +143,7 @@ impl Store {
         let mut stmt = match conn.prepare(
             "SELECT id, title, description, date, hour, minute, all_day, end_hour, end_minute,
                     repeat, message, enabled, last_fired, source, google_calendar_id,
-                    google_event_id, google_readonly, updated_at
+                    google_event_id, updated_at
              FROM events",
         ) {
             Ok(s) => s,
@@ -175,9 +174,8 @@ impl Store {
         Ok(())
     }
 
-    /// Delete every local row synced from one Google event (series master,
-    /// mapped rule, or expanded instances) — used when Google cancels it or
-    /// a series changed shape.
+    /// Delete every local row synced from one Google event — used when
+    /// Google cancels it or the local mapping is replaced.
     pub fn delete_google_rows(&self, calendar_id: &str, google_event_id: &str) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         conn.execute(
@@ -188,16 +186,26 @@ impl Store {
         Ok(())
     }
 
-    /// Drop expanded instances (and only instances) dated before `before_iso`
-    /// so recurring-instance rows don't accumulate behind the sync window.
-    pub fn prune_instances_before(&self, before_iso: &str) -> Result<(), String> {
+    /// One-time row-model migration to the unified Google mapping (v2):
+    /// older versions expanded complex recurring series into per-occurrence
+    /// instance rows (`gcal-<cal>-<gid>-<date>`). Drop those and clear the
+    /// sync tokens so the next cycle full-pulls each calendar and rewrites
+    /// every Google event as a single editable row.
+    pub fn migrate_unified_rows(&self) -> Result<(), String> {
+        const VERSION_KEY: &str = "row_model_version";
+        const CURRENT: &str = "2";
+        if self.config_get(VERSION_KEY).as_deref() == Some(CURRENT) {
+            return Ok(());
+        }
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         conn.execute(
-            "DELETE FROM events WHERE source = 'google' AND google_readonly = 1 AND date < ?1",
-            params![before_iso],
+            "DELETE FROM events WHERE source = 'google' AND id LIKE 'gcal-%-20__-__-__'",
+            [],
         )
-        .map_err(|e| e.to_string())?;
-        Ok(())
+        .map_err(|e| format!("drop expanded instances: {e}"))?;
+        drop(conn);
+        self.sync_state_clear()?;
+        self.config_set(VERSION_KEY, CURRENT)
     }
 
     /// `op_toggle` write-through: enabled flag + optional last_fired reset.
@@ -412,8 +420,8 @@ fn upsert_one(conn: &Connection, e: &CalendarEvent) -> Result<(), String> {
     conn.execute(
         "INSERT INTO events (id, title, description, date, hour, minute, all_day,
                 end_hour, end_minute, repeat, message, enabled, last_fired,
-                source, google_calendar_id, google_event_id, google_readonly, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+                source, google_calendar_id, google_event_id, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
          ON CONFLICT(id) DO UPDATE SET
             title = excluded.title, description = excluded.description,
             date = excluded.date, hour = excluded.hour, minute = excluded.minute,
@@ -423,7 +431,6 @@ fn upsert_one(conn: &Connection, e: &CalendarEvent) -> Result<(), String> {
             last_fired = excluded.last_fired, source = excluded.source,
             google_calendar_id = excluded.google_calendar_id,
             google_event_id = excluded.google_event_id,
-            google_readonly = excluded.google_readonly,
             updated_at = excluded.updated_at",
         params![
             e.id,
@@ -442,7 +449,6 @@ fn upsert_one(conn: &Connection, e: &CalendarEvent) -> Result<(), String> {
             e.source,
             e.google_calendar_id,
             e.google_event_id,
-            e.google_readonly as i64,
             e.updated_at,
         ],
     )
@@ -472,8 +478,7 @@ fn row_to_event(r: &rusqlite::Row<'_>) -> rusqlite::Result<CalendarEvent> {
         source: r.get(13)?,
         google_calendar_id: r.get(14)?,
         google_event_id: r.get(15)?,
-        google_readonly: r.get::<_, i64>(16).unwrap_or(0) != 0,
-        updated_at: r.get(17)?,
+        updated_at: r.get(16)?,
     })
 }
 
@@ -537,7 +542,6 @@ mod tests {
             source: None,
             google_calendar_id: None,
             google_event_id: None,
-            google_readonly: false,
             updated_at: None,
         }
     }
@@ -593,16 +597,8 @@ mod tests {
         e.source = Some("google".into());
         e.google_calendar_id = Some("cal".into());
         e.google_event_id = Some("abc".into());
-        e.google_readonly = true;
         store.upsert_event(&e).unwrap();
 
-        // date < cutoff prunes; the event date itself survives.
-        store.prune_instances_before("2030-03-10").unwrap();
-        assert_eq!(store.count_events(), 1);
-        store.prune_instances_before("2030-03-11").unwrap();
-        assert_eq!(store.count_events(), 0);
-
-        store.upsert_event(&e).unwrap();
         store.delete_google_rows("cal", "abc").unwrap();
         assert_eq!(store.count_events(), 0);
 
@@ -612,6 +608,32 @@ mod tests {
         assert_eq!(list[0].google_calendar_id.as_deref(), Some("cal2"));
         assert_eq!(list[0].google_event_id.as_deref(), Some("xyz"));
         assert_eq!(list[0].updated_at, Some(999));
+    }
+
+    #[test]
+    fn unified_migration_drops_instances_and_clears_tokens() {
+        let store = Arc::new(Store::open(&temp_dir("unified")).unwrap());
+        let mut master = event("gcal-cal-abc", "2030-03-10");
+        master.source = Some("google".into());
+        master.google_calendar_id = Some("cal".into());
+        master.google_event_id = Some("abc".into());
+        let mut instance = event("gcal-cal-abc-2030-03-10", "2030-03-10");
+        instance.source = Some("google".into());
+        instance.google_calendar_id = Some("cal".into());
+        instance.google_event_id = Some("abc".into());
+        let mut local = event("event-123", "2030-03-11");
+        local.source = None;
+        store.upsert_events(&[master, instance, local]).unwrap();
+        store.sync_state_set("cal", Some("tok")).unwrap();
+
+        // First run migrates; a second run is a no-op.
+        store.migrate_unified_rows().unwrap();
+        let list = store.load_events();
+        assert_eq!(list.len(), 2);
+        assert!(list.iter().all(|e| e.id != "gcal-cal-abc-2030-03-10"));
+        assert_eq!(store.sync_token_get("cal"), None);
+        store.migrate_unified_rows().unwrap();
+        assert_eq!(store.load_events().len(), 2);
     }
 
     #[test]

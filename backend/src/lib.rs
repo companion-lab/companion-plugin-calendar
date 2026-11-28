@@ -85,7 +85,8 @@ pub struct CalendarEvent {
     #[serde(default)]
     pub last_fired: Option<i64>,
     /// Origin: `"google"` for rows synced from Google Calendar, absent for
-    /// locally-created events.
+    /// locally-created events. Google rows keep the exact same shape as
+    /// local rows and are edited the same way; edits push back to Google.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
     /// Google sync bookkeeping (set once an event is linked to Google).
@@ -93,10 +94,6 @@ pub struct CalendarEvent {
     pub google_calendar_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub google_event_id: Option<String>,
-    /// True for Google-managed rows the app cannot edit (series mappings
-    /// and expanded recurrence instances).
-    #[serde(default)]
-    pub google_readonly: bool,
     /// Epoch millis of the last local edit (last-write-wins marker).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<i64>,
@@ -283,7 +280,6 @@ impl Calendar {
             source: None,
             google_calendar_id: None,
             google_event_id: None,
-            google_readonly: false,
             updated_at: None,
         };
         let title = if event.title.is_empty() {
@@ -716,10 +712,10 @@ fn sanitize(ev: &mut CalendarEvent) -> Result<(), String> {
         .ok_or_else(|| "could not read the date. Use YYYY-MM-DD, 'today', 'tomorrow', 'Dec 25', or a weekday name.".to_string())?;
     let today = Local::now().date_naive();
     // Only one-shots must start in the future; a recurring event may begin
-    // in the past (its upcoming occurrences are what fire). Google-owned
+    // in the past (its upcoming occurrences are what fire). Google-sourced
     // events may also sit in the past — they are pulled from a 7-day
     // lookback window and stay editable (edits push back to Google).
-    let google_editable = ev.source.as_deref() == Some("google") && !ev.google_readonly;
+    let google_editable = ev.source.as_deref() == Some("google");
     if !google_editable && ev.repeat_rule() == Repeat::None && d < today {
         return Err(
             "that date is in the past. Pick today or a future date, or set a repeat option.".into(),
@@ -1080,6 +1076,12 @@ impl Plugin for CalendarPlugin {
             Ok(n) => ctx.info(&format!("migrated {n} events from calendar.json")),
             Err(e) => ctx.warn(&format!("calendar.json migration skipped: {e}")),
         }
+        // Older versions expanded complex Google series into per-date
+        // instance rows; drop them and force a full resync so every Google
+        // event is re-mapped onto a single editable row.
+        if let Err(e) = store.migrate_unified_rows() {
+            ctx.warn(&format!("google row-model migration skipped: {e}"));
+        }
         let mut calendar = Calendar {
             events: Arc::new(Mutex::new(Vec::new())),
             store: Arc::clone(&store),
@@ -1167,7 +1169,6 @@ mod tests {
             source: None,
             google_calendar_id: None,
             google_event_id: None,
-            google_readonly: false,
             updated_at: None,
         }
     }
@@ -1369,17 +1370,11 @@ mod tests {
     }
 
     #[test]
-    fn google_editable_events_may_sit_in_the_past() {
+    fn google_events_may_sit_in_the_past() {
         // Pulled from the 7-day lookback window and pushed back on edit.
         let mut e = event("2000-01-01", 9, 0);
         e.source = Some("google".into());
-        e.google_readonly = false;
         sanitize(&mut e).unwrap();
-        // Google-managed rows still behave like local ones here.
-        let mut ro = event("2000-01-01", 9, 0);
-        ro.source = Some("google".into());
-        ro.google_readonly = true;
-        assert!(sanitize(&mut ro).is_err());
     }
 
     #[test]

@@ -20,8 +20,6 @@ type Props = {
   children: ReactNode;
   /** Optional destructive action (e.g. Delete), rendered left of Cancel. */
   danger?: ReactNode;
-  /** Details view: hide the Save button entirely. */
-  readOnly?: boolean;
 };
 
 export function ServerFormModal({
@@ -34,7 +32,6 @@ export function ServerFormModal({
   onClose,
   children,
   danger,
-  readOnly,
 }: Props) {
   const { Button } = ui;
 
@@ -75,13 +72,11 @@ export function ServerFormModal({
         <div className="modal-actions">
           {danger}
           <Button variant="secondary" onClick={onClose} disabled={busy}>
-            {readOnly ? "Close" : "Cancel"}
+            Cancel
           </Button>
-          {!readOnly && (
-            <Button variant="primary" onClick={onSave} disabled={busy || !canSave}>
-              {busy ? "Saving…" : saveLabel}
-            </Button>
-          )}
+          <Button variant="primary" onClick={onSave} disabled={busy || !canSave}>
+            {busy ? "Saving…" : saveLabel}
+          </Button>
         </div>
       </div>
     </div>,

@@ -1,7 +1,7 @@
 {
   "id": "calendar",
   "name": "Calendar",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Dated events, birthdays, and appointments: a settings tab, reminder banners, calendar tools the avatar can call, and optional Google Calendar two-way sync.",
   "abi": 3,
   "permissions": [

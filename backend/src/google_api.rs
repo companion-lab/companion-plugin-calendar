@@ -69,13 +69,6 @@ pub struct GEvent {
     /// RFC 5545 lines ("RRULE:FREQ=DAILY", "EXDATE:…") when recurring.
     #[serde(default)]
     pub recurrence: Option<Vec<String>>,
-    /// Present on instance overrides of a recurring series.
-    #[serde(default, rename = "recurringEventId")]
-    pub recurring_event_id: Option<String>,
-    /// Original occurrence time of an override (used to exclude that
-    /// occurrence when expanding the series).
-    #[serde(default, rename = "originalStart")]
-    pub original_start: Option<GTime>,
 }
 
 /// One page of an incremental/full events.list response.
